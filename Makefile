@@ -1,5 +1,5 @@
-ag:
-	python3 genetic.py
+dependencies:
+	pip install -r requirements.txt
 
-dev:
-	python3 app.py
+magic:
+	streamlit run app.py
