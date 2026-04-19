@@ -4,7 +4,8 @@
 ## Basicly,
 
 - The maximum of a polynomial is approximated using a genetic algorithm.
-- [**app.py**](/app.py) contains the interface written with Streamlit and Plotly, while [**genetic.py**](/genetic.py) has the algorithm's implementation and logging system. _This is the only one file containing generated code._
+- [**app.py**](/app.py) contains the interface written with Streamlit and Plotly. _This is the only one file containing generated code._
+- [**genetic.py**](/genetic.py) has the algorithm's implementation and logging system.
 
 ## Requirements
 
