@@ -1,7 +1,7 @@
 # Genetic Algotithms - Function Maximization
 > Vlad Minciunescu ~ 251 | University of Bucharest
 
-## Basicly,
+## Basically,
 
 - The maximum of a polynomial is approximated using a genetic algorithm.
 - [**app.py**](/app.py) contains the interface written with Streamlit and Plotly. _This is the only one file containing generated code._
