@@ -61,12 +61,12 @@ def read_evolution_file(file_path: str = 'Evolutie.txt') -> str:
 def parse_first_generation(evolution_text: str) -> list[dict]:
     rows = []
     in_initial_population = False
-    pattern = re.compile(r"^\s*(\d+):\s*([01]+)\s*x\s*=\s*([-+0-9.eE]+)\s*f\s*=\s*([-+0-9.eE]+)")
+    pattern = re.compile(r"^\s*(\d+):\s*([01]+)\s*x\s*=\s*([-+0-9.,eE]+)\s*f\s*=\s*([-+0-9.,eE]+)")
 
     for line in evolution_text.splitlines():
         stripped = line.strip()
 
-        if stripped.startswith('Populatia initiala'):
+        if stripped.startswith('Populatia initiala') or stripped.startswith('Populatie initiala'):
             in_initial_population = True
             continue
 
@@ -80,13 +80,13 @@ def parse_first_generation(evolution_text: str) -> list[dict]:
         if match:
             index, chromosome, x_value, fitness_value = match.groups()
             rows.append(
-                {
-                    'index': int(index),
-                    'chromosome': chromosome,
-                    'x': float(x_value),
-                    'f(x)': float(fitness_value),
-                }
-            )
+                    {
+                        'index': int(index),
+                        'chromosome': chromosome,
+                        'x': parse_float(x_value),
+                        'f(x)': parse_float(fitness_value),
+                    }
+                )
 
     if not rows:
         raise ValueError('Could not parse first generation from Evolutie.txt.')
@@ -123,6 +123,234 @@ def generation_rows_to_csv(rows: list[dict]) -> str:
     return output.getvalue()
 
 
+def parse_float(value: str) -> float:
+    return float(value.replace(',', '.'))
+
+
+def parse_population_section(evolution_text: str, section_titles: list[str]) -> list[dict]:
+    lines = evolution_text.splitlines()
+    pattern = re.compile(r"^\s*(\d+):\s*([01]+)\s*x\s*=\s*([-+0-9.,eE]+)\s*f\s*=\s*([-+0-9.,eE]+)\s*$")
+    rows = []
+    in_section = False
+
+    for line in lines:
+        stripped = line.strip()
+        if any(stripped.startswith(title) for title in section_titles):
+            in_section = True
+            continue
+
+        if not in_section:
+            continue
+
+        if not stripped:
+            if rows:
+                break
+            continue
+
+        match = pattern.match(stripped)
+        if not match:
+            if rows:
+                break
+            continue
+
+        index, chromosome, x_value, fitness_value = match.groups()
+        rows.append(
+            {
+                'index': int(index),
+                'chromosome': chromosome,
+                'x': parse_float(x_value),
+                'f(x)': parse_float(fitness_value),
+            }
+        )
+
+    return rows
+
+
+def parse_selection_details(evolution_text: str) -> dict:
+    lines = evolution_text.splitlines()
+    probability_pattern = re.compile(r"^\s*(\d+):\s*([01]+)\s+probabilitiate\s*=\s*([-+0-9.,eE]+)\s*$")
+    draw_pattern = re.compile(r"^u\s*=\s*([-+0-9.,eE]+)\s+selectam cromozomul\s+(\d+)\s*$")
+    probabilities = []
+    intervals = []
+    draws = []
+    in_probabilities = False
+    in_intervals = False
+
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith('Probabilitati selectie'):
+            in_probabilities = True
+            in_intervals = False
+            continue
+
+        if stripped.startswith('Intervale probabilitati selectie'):
+            in_probabilities = False
+            in_intervals = True
+            continue
+
+        if stripped.startswith('Dupa selectie'):
+            break
+
+        if in_probabilities:
+            match = probability_pattern.match(stripped)
+            if match:
+                index, chromosome, probability = match.groups()
+                probabilities.append(
+                    {
+                        'index': int(index),
+                        'chromosome': chromosome,
+                        'probability': parse_float(probability),
+                    }
+                )
+
+        if in_intervals:
+            draw_match = draw_pattern.match(stripped)
+            if draw_match:
+                draw_value, selected_idx = draw_match.groups()
+                draws.append({'u': parse_float(draw_value), 'selected_idx': int(selected_idx)})
+                continue
+
+            if stripped:
+                try:
+                    intervals.append(parse_float(stripped))
+                except ValueError:
+                    pass
+
+    return {
+        'probabilities': probabilities,
+        'intervals': intervals,
+        'draws': draws,
+    }
+
+
+def parse_crossover_details(evolution_text: str) -> dict:
+    lines = evolution_text.splitlines()
+    parent_pattern = re.compile(r"^\s*(\d+):\s*([01]+)\s*u\s*=\s*([-+0-9.,eE]+)(.*)$")
+    event_pattern = re.compile(r"^Recombinare dintre cromozomul\s+(\d+)\s+cu cromozomul\s+(\d+)\s+la punctul\s+(\d+)\s*$")
+    before_pattern = re.compile(r"^BEF:\s*([01]+)\s*<->\s*([01]+)\s*$")
+    after_pattern = re.compile(r"^AFT:\s*([01]+)\s*<->\s*([01]+)\s*$")
+    threshold = None
+    parents = []
+    events = []
+    in_crossover_section = False
+    idx = 0
+
+    while idx < len(lines):
+        stripped = lines[idx].strip()
+        if stripped.startswith('Probabilitatea de incrucisare'):
+            in_crossover_section = True
+            try:
+                threshold = parse_float(stripped.split()[-1])
+            except ValueError:
+                threshold = None
+            idx += 1
+            continue
+
+        if in_crossover_section:
+            if stripped.startswith('Dupa recombinare'):
+                break
+
+            parent_match = parent_pattern.match(stripped)
+            if parent_match:
+                chromosome_idx, chromosome, u_value, tail = parent_match.groups()
+                parents.append(
+                    {
+                        'index': int(chromosome_idx),
+                        'chromosome': chromosome,
+                        'u': parse_float(u_value),
+                        'participates': 'participa' in tail,
+                    }
+                )
+                idx += 1
+                continue
+
+            event_match = event_pattern.match(stripped)
+            if event_match and idx + 2 < len(lines):
+                p1_idx, p2_idx, point = event_match.groups()
+                before_line = lines[idx + 1].strip()
+                after_line = lines[idx + 2].strip()
+                before_match = before_pattern.match(before_line)
+                after_match = after_pattern.match(after_line)
+                if before_match and after_match:
+                    bef1, bef2 = before_match.groups()
+                    aft1, aft2 = after_match.groups()
+                    events.append(
+                        {
+                            'p1_idx': int(p1_idx),
+                            'p2_idx': int(p2_idx),
+                            'point': int(point),
+                            'before_p1': bef1,
+                            'before_p2': bef2,
+                            'after_p1': aft1,
+                            'after_p2': aft2,
+                        }
+                    )
+                idx += 3
+                continue
+
+        idx += 1
+
+    return {
+        'threshold': threshold,
+        'parents': parents,
+        'events': events,
+    }
+
+
+def parse_mutation_changes(evolution_text: str) -> list[int]:
+    lines = evolution_text.splitlines()
+    modified_pattern = re.compile(r"^\s*(\d+)\s*$")
+    modified = []
+    in_modified_block = False
+
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith('Au fost modificati cromozomii'):
+            in_modified_block = True
+            continue
+
+        if in_modified_block:
+            if stripped.startswith('Dupa mutatie') or stripped.startswith('Evolutia maximului'):
+                break
+            match = modified_pattern.match(stripped)
+            if match:
+                modified.append(int(match.group(1)))
+
+    return modified
+
+
+def parse_evolution_details(evolution_text: str) -> dict:
+    initial_rows = parse_population_section(evolution_text, ['Populatia initiala', 'Populatie initiala'])
+    selected_rows = parse_population_section(evolution_text, ['Dupa selectie'])
+    recombined_rows = parse_population_section(evolution_text, ['Dupa recombinare'])
+    mutated_rows = parse_population_section(evolution_text, ['Dupa mutatie'])
+    selection = parse_selection_details(evolution_text)
+    crossover = parse_crossover_details(evolution_text)
+    mutation_changed = parse_mutation_changes(evolution_text)
+
+    return {
+        'initial_rows': initial_rows,
+        'selected_rows': selected_rows,
+        'recombined_rows': recombined_rows,
+        'mutated_rows': mutated_rows,
+        'selection': selection,
+        'crossover': crossover,
+        'mutation_changed': mutation_changed,
+    }
+
+
+def build_first_generation_analysis(file_path: str = 'Evolutie.txt') -> dict:
+    evolution_text = read_evolution_file(file_path)
+    first_generation_rows = parse_first_generation(evolution_text)
+    summary = summarize_first_generation(first_generation_rows)
+    details = parse_evolution_details(evolution_text)
+    return {
+        'rows': first_generation_rows,
+        'summary': summary,
+        'details': details,
+    }
+
+
 st.set_page_config(page_title='Genetic Function Maximization', layout='wide')
 st.title('Function Maximization')
 st.caption('University project for Genetic Algorithms')
@@ -155,6 +383,7 @@ with st.sidebar:
 
 st.subheader('Selected polynomial')
 st.code(f"f(x) = {format_polynomial(coefficients)}")
+st.caption('This is the exact function optimized by the genetic algorithm.')
 
 if upper_bound <= lower_bound:
     st.error('Upper bound must be greater than lower bound to visualize and run optimization.')
@@ -181,6 +410,7 @@ else:
         template='plotly_white',
         margin={'l': 20, 'r': 20, 't': 50, 'b': 20},
     )
+    st.caption('Function preview: shows how f(x) behaves on the selected interval before running GA.')
     st.plotly_chart(function_figure, width='stretch')
 
     if run:
@@ -206,6 +436,10 @@ else:
             'mean_history': mean_history,
             'seed': run_seed,
         }
+        try:
+            st.session_state['first_generation_analysis'] = build_first_generation_analysis()
+        except (FileNotFoundError, ValueError):
+            st.session_state.pop('first_generation_analysis', None)
 
 if 'ga_result' in st.session_state:
     max_history = st.session_state['ga_result']['max_history']
@@ -244,6 +478,7 @@ if 'ga_result' in st.session_state:
         yaxis_title='Fitness',
         template='plotly_white',
     )
+    st.caption('Fitness evolution: max fitness is the best individual each generation, mean fitness is overall population quality.')
     st.plotly_chart(evolution_figure, width='stretch')
 
     controls_col_1, controls_col_2 = st.columns(2)
@@ -262,13 +497,7 @@ if 'ga_result' in st.session_state:
 
     if analyze_first_generation:
         try:
-            evolution_text = read_evolution_file()
-            first_generation_rows = parse_first_generation(evolution_text)
-            summary = summarize_first_generation(first_generation_rows)
-            st.session_state['first_generation_analysis'] = {
-                'rows': first_generation_rows,
-                'summary': summary,
-            }
+            st.session_state['first_generation_analysis'] = build_first_generation_analysis()
         except (FileNotFoundError, ValueError) as error:
             st.session_state.pop('first_generation_analysis', None)
             st.error(str(error))
@@ -279,6 +508,7 @@ if 'ga_result' in st.session_state:
         rows = analysis['rows']
 
         st.subheader('First generation analysis')
+        st.caption('This section explains what happened specifically in generation 1, using Evolutie.txt logs.')
         metric_col_1, metric_col_2, metric_col_3, metric_col_4 = st.columns(4)
         metric_col_1.metric('Population', summary['size'])
         metric_col_2.metric('Mean f(x)', f"{summary['mean_fitness']:.6f}")
@@ -296,5 +526,169 @@ if 'ga_result' in st.session_state:
             mime='text/csv',
             width='stretch',
         )
+
+        details = analysis['details']
+        selection = details['selection']
+        crossover = details['crossover']
+
+        st.subheader('Selection dynamics')
+        if selection['probabilities'] and selection['draws']:
+            population_indices = [row['index'] for row in selection['probabilities']]
+            probability_values = [row['probability'] for row in selection['probabilities']]
+            draw_count = len(selection['draws'])
+            selected_counts = {index: 0 for index in population_indices}
+            for draw in selection['draws']:
+                selected_counts[draw['selected_idx']] = selected_counts.get(draw['selected_idx'], 0) + 1
+            selected_relative = [
+                selected_counts[index] / draw_count if draw_count else 0.0
+                for index in population_indices
+            ]
+
+            probability_figure = go.Figure()
+            probability_figure.add_trace(
+                go.Bar(
+                    x=population_indices,
+                    y=probability_values,
+                    name='Theoretical probability',
+                )
+            )
+            probability_figure.add_trace(
+                go.Bar(
+                    x=population_indices,
+                    y=selected_relative,
+                    name='Observed frequency (first generation)',
+                )
+            )
+            probability_figure.update_layout(
+                barmode='group',
+                title='Selection probability vs observed picks',
+                xaxis_title='Chromosome index',
+                yaxis_title='Value',
+                template='plotly_white',
+            )
+            st.caption(
+                'Selection probability vs observed picks: compares expected roulette probability with actual selection frequency.'
+            )
+            st.plotly_chart(probability_figure, width='stretch')
+
+            roulette_figure = go.Figure()
+            if selection['intervals']:
+                roulette_figure.add_trace(
+                    go.Scatter(
+                        x=list(range(len(selection['intervals']))),
+                        y=selection['intervals'],
+                        mode='lines+markers',
+                        name='Cumulative intervals',
+                    )
+                )
+            roulette_figure.add_trace(
+                go.Scatter(
+                    x=[draw['selected_idx'] for draw in selection['draws']],
+                    y=[draw['u'] for draw in selection['draws']],
+                    mode='markers',
+                    name='Random draws u',
+                    marker={
+                        'size': 10,
+                        'color': [draw['selected_idx'] for draw in selection['draws']],
+                        'colorscale': 'Viridis',
+                        'showscale': True,
+                        'colorbar': {'title': 'Selected idx'},
+                    },
+                )
+            )
+            roulette_figure.update_layout(
+                title='Roulette wheel map (intervals and selections)',
+                xaxis_title='Chromosome index / interval boundary',
+                yaxis_title='u in [0, 1]',
+                template='plotly_white',
+            )
+            st.caption(
+                'Roulette wheel map: each dot is a random draw u; where it lands on cumulative intervals decides selected chromosome.'
+            )
+            st.plotly_chart(roulette_figure, width='stretch')
+        else:
+            st.info('No selection details found in Evolutie.txt.')
+
+        st.subheader('Crossover and mutation')
+        if crossover['parents']:
+            crossover_figure = go.Figure()
+            crossover_figure.add_trace(
+                go.Bar(
+                    x=[row['index'] for row in crossover['parents']],
+                    y=[row['u'] for row in crossover['parents']],
+                    marker={
+                        'color': ['#16a34a' if row['participates'] else '#9ca3af' for row in crossover['parents']]
+                    },
+                    name='u value per chromosome',
+                )
+            )
+            if crossover['threshold'] is not None:
+                crossover_figure.add_hline(
+                    y=crossover['threshold'],
+                    line_dash='dash',
+                    line_color='#dc2626',
+                    annotation_text=f"threshold = {crossover['threshold']}",
+                    annotation_position='top left',
+                )
+            crossover_figure.update_layout(
+                title='Crossover participation threshold',
+                xaxis_title='Chromosome index',
+                yaxis_title='u',
+                template='plotly_white',
+            )
+            st.caption(
+                'Crossover participation: bars under the red threshold participate in recombination, others remain unchanged at this step.'
+            )
+            st.plotly_chart(crossover_figure, width='stretch')
+        else:
+            st.info('No crossover participation section found in Evolutie.txt.')
+
+        if details['recombined_rows'] and details['mutated_rows']:
+            recombined_by_idx = {row['index']: row for row in details['recombined_rows']}
+            mutated_by_idx = {row['index']: row for row in details['mutated_rows']}
+            common_indices = sorted(set(recombined_by_idx).intersection(mutated_by_idx))
+            mutation_delta_rows = []
+            for index in common_indices:
+                before_row = recombined_by_idx[index]
+                after_row = mutated_by_idx[index]
+                mutation_delta_rows.append(
+                    {
+                        'index': index,
+                        'delta_f': after_row['f(x)'] - before_row['f(x)'],
+                        'changed': before_row['chromosome'] != after_row['chromosome'],
+                    }
+                )
+
+            mutation_figure = go.Figure()
+            mutation_figure.add_trace(
+                go.Bar(
+                    x=[row['index'] for row in mutation_delta_rows],
+                    y=[row['delta_f'] for row in mutation_delta_rows],
+                    marker={
+                        'color': ['#f97316' if row['changed'] else '#d1d5db' for row in mutation_delta_rows]
+                    },
+                    name='delta f(x) from mutation',
+                )
+            )
+            mutation_figure.update_layout(
+                title='Mutation impact by chromosome (after - before)',
+                xaxis_title='Chromosome index',
+                yaxis_title='delta f(x)',
+                template='plotly_white',
+            )
+            st.caption(
+                'Mutation impact: positive bars mean mutation improved fitness, negative bars mean it reduced fitness.'
+            )
+            st.plotly_chart(mutation_figure, width='stretch')
+
+            st.caption(
+                f"Mutated chromosomes logged: {', '.join(str(idx) for idx in details['mutation_changed']) if details['mutation_changed'] else 'none'}"
+            )
+
+        if crossover['events']:
+            st.write('Recombination events (first generation)')
+            st.caption('Each row shows parent pair, crossover point, and resulting offspring chromosomes.')
+            st.dataframe(crossover['events'], width='stretch', hide_index=True)
 else:
     st.info('Set parameters from the sidebar and click `Run Genetic Algorithm`.')
+
